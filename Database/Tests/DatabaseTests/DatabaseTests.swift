@@ -35,9 +35,9 @@ final class DatabaseTests: XCTestCase {
                 var bar2: [Foo]
                 @EntityRepresentableIgnorable
                 var ignored = ""
-                @EntityRepresentableCustomNamed("thatsOpt")
-                var valorOptional: String? = nil
-                var arrayOptional: [String]? = nil
+                var optionalValue: String?
+                var array1: [String]
+                var array2: [String]?
             }
             """,
             expandedSource: """
@@ -49,8 +49,9 @@ final class DatabaseTests: XCTestCase {
                 var bar: Foo
                 var bar2: [Foo]
                 var ignored = ""
-                var valorOptional: String? = nil
-                var arrayOptional: [String]? = nil
+                var optionalValue: String?
+                var array1: [String]
+                var array2: [String]?
             }
             
             extension Clothing: EntityRepresentable {
@@ -71,11 +72,14 @@ final class DatabaseTests: XCTestCase {
                     let encoded = EntityRepresentation(id: self.id, entityName: "ClothingEntity", values: [:], toOneRelationships: [:], toManyRelationships: [:])
                     visited[self.id] = encoded
             
-                    let values: [String : Any] = [
+                    var values: [String : Any] = [
                         "id" : self.id,
                         "valor" : self.valor,
-                        "thatsOpt" : self.valorOptional,
                     ]
+            
+                    if self.optionalValue != nil {
+                        values["optionalValue"] = self.optionalValue!
+                    }
             
                     let toOneRelationships: [String : EntityRepresentation] = [
                         "barril" : self.bar.encode(visited: &visited),

@@ -11,6 +11,7 @@ public struct EntityRepresentableMacro: ExtensionMacro {
         case entityTypeIsntValid
         case classDoesntHaveProperties
         case classDoesntHaveIDProperty
+        case variableTypeMalFormed(variable: String)
     }
     
     private enum Relationship {
@@ -24,6 +25,7 @@ public struct EntityRepresentableMacro: ExtensionMacro {
         var customName: String? = nil
         var relationship: Relationship = .none
         var isOptional: Bool = false
+        var type: String = ""
         var declaration: VariableDeclSyntax
     }
     
@@ -34,18 +36,18 @@ public struct EntityRepresentableMacro: ExtensionMacro {
         var variables = try Self.getVariables(from: declaration)
         try Self.validateIDExistence(on: variables)
         
-        variables = try Self.filterOutIgnorables(on: variables)
-        let findOptionals = try Self.findOptionals(on: variables)
-        let hasOptionals = findOptionals.hasOptionals
-        variables = findOptionals.variables
-
-        variables = try Self.findRelationships(on: variables)
-        variables = try Self.getVariableNames(of: variables)
+        variables = Self.filterOutIgnorables(on: variables)
+        variables = Self.getVariableNames(of: variables)
+        variables = try Self.findRelationshipsAndTypes(on: variables)
+        
+        print(variables.map(\.type))
         
         let entityName = try Self.getEntityName(of: node)
         
-        // Parsing variables for Encode
-        let values = Self.parseValuesIntoDictString(variables: variables)
+        // Parsing encoding variables
+        let (values, optionalValues) = Self.parseValuesIntoDictString(variables: variables)
+        
+        let valuesDecl = variables.contains(where: \.isOptional) ? "var" : "let"
         let (toOne, toMany) = Self.parseRelationshipsIntoDictString(variables: variables)
         
         let entityRepresentableExtension = try ExtensionDeclSyntax("""
@@ -67,10 +69,10 @@ public struct EntityRepresentableMacro: ExtensionMacro {
                 let encoded = EntityRepresentation(id: self.id, entityName: "\(raw: entityName)", values: [:], toOneRelationships: [:], toManyRelationships: [:])
                 visited[self.id] = encoded
         
-                let values: [String : Any] = [
+                \(raw: valuesDecl) values: [String : Any] = [
                     \(raw: values)
                 ]
-        
+                \(optionalValues.isEmpty ? "" : "\n\(optionalValues)\n")
                 let toOneRelationships: [String : EntityRepresentation] = [
                     \(raw: toOne)
                 ]
@@ -97,10 +99,17 @@ public struct EntityRepresentableMacro: ExtensionMacro {
 
 // MARK: - Main Macro Encode Parsers
 extension EntityRepresentableMacro {
-    private static func parseValuesIntoDictString(variables: [VariableDetails]) -> String {
-        let parsedStrings = variables
+    private static func parseValuesIntoDictString(variables: [VariableDetails]) -> (values: String, optionals: String) {
+        var optionals = [VariableDetails]()
+        
+        let parsedValues = variables
             .reduce([String]()) { partialResult, variable in
                 guard variable.relationship == .none else { return partialResult }
+
+                guard !variable.isOptional else {
+                    optionals.append(variable)
+                    return partialResult
+                }
                 
                 var newResult = partialResult
                 let variableName = variable.customName != nil ? variable.customName! : variable.trueName
@@ -112,11 +121,25 @@ extension EntityRepresentableMacro {
                 return newResult
             }
         
-        if parsedStrings.isEmpty {
-            return ":"
+        let parsedOptionalValues = optionals
+            .map { variable in
+                let variableName = variable.customName != nil ? variable.customName! : variable.trueName
+                
+                let result = """
+                if self.\(variable.trueName) != nil {
+                    values["\(variableName)"] = self.\(variable.trueName)!
+                }
+                """
+                
+                return result
+            }
+            .joined(separator: "\n\n")
+        
+        if parsedValues.isEmpty {
+            return (":", parsedOptionalValues)
         }
         
-        return parsedStrings.joined(separator: "\n")
+        return (parsedValues.joined(separator: "\n"), parsedOptionalValues)
     }
     
     private static func parseRelationshipsIntoDictString(variables: [VariableDetails]) -> (toOne: String, toMany: String) {
@@ -164,6 +187,28 @@ extension EntityRepresentableMacro {
         return classDecl
     }
     
+    private static func validateIDExistence(on variables: [VariableDetails]) throws {
+        let idExists = variables
+            .filter { variable in
+                // TODO: fazer passar por toda a lista de bindings
+                guard variable.declaration.bindings.first?.pattern.as(IdentifierPatternSyntax.self)?.identifier.text == "id" else {
+                    return false
+                }
+                
+                // TODO: fazer passar por toda a lista de bindings
+                guard variable.declaration.bindings.first?.typeAnnotation?.type.as(IdentifierTypeSyntax.self)?.name.text == "UUID" else {
+                    return false
+                }
+                
+                return true
+            }
+            .count == 1
+        
+        guard idExists else {
+            throw EntityRepresentableError.classDoesntHaveIDProperty
+        }
+    }
+    
     private static func getEntityName(of node: AttributeSyntax) throws -> String {
         guard let argumentList = node.arguments else {
             throw EntityRepresentableError.mustHaveOneArgument(numberOfArgumentsProvided: 0)
@@ -198,30 +243,8 @@ extension EntityRepresentableMacro {
             .map({ VariableDetails(declaration: $0) })
     }
     
-    private static func validateIDExistence(on variables: [VariableDetails]) throws {
-        let idExists = variables
-            .filter { variable in
-                // TODO: fazer passar por toda a lista de bindings
-                guard variable.declaration.bindings.first?.pattern.as(IdentifierPatternSyntax.self)?.identifier.text == "id" else {
-                    return false
-                }
-                
-                // TODO: fazer passar por toda a lista de bindings
-                guard variable.declaration.bindings.first?.typeAnnotation?.type.as(IdentifierTypeSyntax.self)?.name.text == "UUID" else {
-                    return false
-                }
-                
-                return true
-            }
-            .count == 1
-        
-        guard idExists else {
-            throw EntityRepresentableError.classDoesntHaveIDProperty
-        }
-    }
-    
-    private static func findRelationships(on variables: [VariableDetails]) throws -> [VariableDetails] {
-        variables
+    private static func findRelationshipsAndTypes(on variables: [VariableDetails]) throws -> [VariableDetails] {
+        try variables
             .map { variable in
                 let isRelationship = variable.declaration.attributes
                     .compactMap({ $0.as(AttributeSyntax.self)?.attributeName.as(IdentifierTypeSyntax.self) })
@@ -229,22 +252,61 @@ extension EntityRepresentableMacro {
                     .map(\.name.text)
                     .count == 1
                 
-                if isRelationship {
-                    let isArray = variable.declaration.bindings.first?.typeAnnotation?.type.is(ArrayTypeSyntax.self) ?? false
-                    
-                    if isArray {
-                        return VariableDetails(relationship: .toMany, declaration: variable.declaration)
+                let arrayType = variable.declaration.bindings.first?.typeAnnotation?.type.as(ArrayTypeSyntax.self)
+                if let arrayType = arrayType {
+                    // TODO: Fix this. It will break if it is an array with optional values inside it.
+                    guard var type = arrayType.element.as(IdentifierTypeSyntax.self)?.name.text else {
+                        throw EntityRepresentableError.variableTypeMalFormed(variable: variable.trueName)
                     }
                     
-                    return VariableDetails(relationship: .toOne, declaration: variable.declaration)
+                    type = "[\(type)]"
+                    
+                    if isRelationship {
+                        return VariableDetails(trueName: variable.trueName, customName: variable.customName, relationship: .toMany, type: type, declaration: variable.declaration)
+                    }
+                    
+                    return VariableDetails(trueName: variable.trueName, customName: variable.customName, relationship: .none, type: type, declaration: variable.declaration)
                 }
                 
-                return variable
+                let optionalType = variable.declaration.bindings.first?.typeAnnotation?.type.as(OptionalTypeSyntax.self)
+                if let optionalType = optionalType {
+                    if var type = optionalType.wrappedType.as(ArrayTypeSyntax.self)?.element.as(IdentifierTypeSyntax.self)?.name.text {
+                        type = "[\(type)]"
+                        if isRelationship {
+                            return VariableDetails(trueName: variable.trueName, customName: variable.customName, relationship: .toMany, isOptional: true, type: type, declaration: variable.declaration)
+                        }
+                        
+                        return VariableDetails(trueName: variable.trueName, customName: variable.customName, relationship: .none, isOptional: true, type: type, declaration: variable.declaration)
+                    }
+                    
+                    guard let type = optionalType.wrappedType.as(IdentifierTypeSyntax.self)?.name.text else {
+                        throw EntityRepresentableError.variableTypeMalFormed(variable: variable.trueName)
+                    }
+                    
+                    if isRelationship {
+                        return VariableDetails(trueName: variable.trueName, customName: variable.customName, relationship: .toOne, isOptional: true, type: type, declaration: variable.declaration)
+                    }
+                    
+                    return VariableDetails(trueName: variable.trueName, customName: variable.customName, relationship: .none, isOptional: true, type: type, declaration: variable.declaration)
+                }
+                
+                let pureType = variable.declaration.bindings.first?.typeAnnotation?.type.as(IdentifierTypeSyntax.self)
+                if let pureType = pureType {
+                    let type = pureType.name.text
+                    
+                    if isRelationship {
+                        return VariableDetails(trueName: variable.trueName, customName: variable.customName, relationship: .toOne, type: type, declaration: variable.declaration)
+                    }
+                    
+                    return VariableDetails(trueName: variable.trueName, customName: variable.customName, relationship: .none, type: type, declaration: variable.declaration)
+                }
+
+                throw EntityRepresentableError.variableTypeMalFormed(variable: variable.trueName)
             }
     }
     
-    private static func filterOutIgnorables(on variables: [VariableDetails]) throws -> [VariableDetails] {
-        return variables
+    private static func filterOutIgnorables(on variables: [VariableDetails]) -> [VariableDetails] {
+        variables
             .filter { variable in
                 variable.declaration.attributes
                     .compactMap({ $0.as(AttributeSyntax.self)?.attributeName.as(IdentifierTypeSyntax.self) })
@@ -253,7 +315,7 @@ extension EntityRepresentableMacro {
             }
     }
     
-    private static func getVariableNames(of variables: [VariableDetails]) throws -> [VariableDetails] {
+    private static func getVariableNames(of variables: [VariableDetails]) -> [VariableDetails] {
         variables
             .reduce([VariableDetails]()) { partialResult, variable in
                 let customNamedAttribute = variable.declaration.attributes
@@ -283,27 +345,6 @@ extension EntityRepresentableMacro {
                 
                 return newResult
             }
-    }
-    
-    private static func findOptionals(on variables: [VariableDetails]) throws -> (variables: [VariableDetails], hasOptionals: Bool) {
-        var hasOptionalValues = false
-        
-        let variables = variables
-            .map { variable in
-                let isOptional = variable
-                    .declaration
-                    .bindings
-                    .compactMap({ $0.typeAnnotation?.type.as(OptionalTypeSyntax.self) })
-                    .count > 0
-                
-                if isOptional && !hasOptionalValues {
-                    hasOptionalValues = true
-                }
-                
-                return VariableDetails(trueName: variable.trueName, customName: variable.customName, relationship: variable.relationship, isOptional: isOptional, declaration: variable.declaration)
-            }
-        
-        return (variables, hasOptionalValues)
     }
 }
 
