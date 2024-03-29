@@ -4,7 +4,7 @@ Since 2023 I have been thinking a lot about the backend architecture for iOS app
 
 The last thing I did was to create a package (still unpublished) that, together with a small dependency injection system, allows my apps to know *nothing* about the database layer (following the repository pattern) besides how to encode/decode the models into a generic representation of an entity.
 
-I was writing *a lot* of boilerplate code for encoding and decoding my models and this bothered me. So then Swift announced macros and I saw the opportunity to fix this boilerplate problem and learn something weird alongside. This is still a early work and doesn't have the best practices *at all*, but given the... *cof* "minimalist" *cof* documentation on macros, I think it is fine.
+I was writing *a lot* of boilerplate code for encoding and decoding my models and this bothered me. So when Swift announced macros I saw the opportunity to fix this problem and learn something weird alongside it. This is still a early work and doesn't have the best practices *at all*, but given the... *cof* "minimalist" *cof* documentation on macros, I think it is fine.
 
 ## Help me a bit...
 
