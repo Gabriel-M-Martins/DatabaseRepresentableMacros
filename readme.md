@@ -10,6 +10,10 @@ I was writing *a lot* of boilerplate code for encoding and decoding my models an
 
 I had some trouble setting up this macro package to use the database package and kind of just copy and past'ed the code inside this package, which isn't ideal. I tried to find some documentation for referencing dependencies inside this package but didn't find how to do it. Probably I just looked over it and didn't get it... If you know how to do it, please tell me... Thanks.
 
+## By the way
+
+The nomenclature I used for the macros and everything is a bit... bad, to say the least. I'm open to suggestions.
+
 # Can I use it?
 
 Make yourself confortable, if you see this being useful for you, do whatever you want with this. Consider giving me credits or referencing my work whenever possible, but, you know, free software and everything...
