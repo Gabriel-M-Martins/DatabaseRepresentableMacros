@@ -38,9 +38,9 @@ final class DatabaseTests: XCTestCase {
                 var ignored = ""
                 var optionalValue: String?
                 @EntityRepresentableCodable
-                var image: Data?
+                var casoDoEnum: EnumDeAlgo
                 @EntityRepresentableCodable
-                var thumbnail: Data
+                var casoOpcionalDoEnum: EnumDeAlgo?
             }
             """,
             expandedSource: """
@@ -52,8 +52,8 @@ final class DatabaseTests: XCTestCase {
                 var bar2: [Foo]
                 var ignored = ""
                 var optionalValue: String?
-                var image: Data?
-                var thumbnail: Data
+                var casoDoEnum: EnumDeAlgo
+                var casoOpcionalDoEnum: EnumDeAlgo?
             }
             
             extension Clothing: EntityRepresentable {
