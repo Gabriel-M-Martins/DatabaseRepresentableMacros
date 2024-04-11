@@ -12,3 +12,6 @@ public macro EntityRepresentableIgnorable() = #externalMacro(module: "DatabaseMa
 
 @attached(memberAttribute)
 public macro EntityRepresentableCustomNamed(_ name: String) = #externalMacro(module: "DatabaseMacros", type: "EntityRepresentableCustomNamedMacro")
+
+@attached(memberAttribute)
+public macro EntityRepresentableCodable() = #externalMacro(module: "DatabaseMacros", type: "EntityRepresentableCodableMacro")

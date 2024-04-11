@@ -40,15 +40,19 @@ public struct EntityRepresentableMacro: ExtensionMacro {
         variables = Self.getVariableNames(of: variables)
         variables = try Self.findRelationshipsAndTypes(on: variables)
         
-        print(variables.map(\.type))
-        
         let entityName = try Self.getEntityName(of: node)
         
-        // Parsing encoding variables
-        let (values, optionalValues) = Self.parseValuesIntoDictString(variables: variables)
-        
+        // tem que mudar por causa dos codable da vida
         let valuesDecl = variables.contains(where: \.isOptional) ? "var" : "let"
+        
+        // Parsing encoding variables
+        let (encodingPlainValues, encodingOptionalValues) = Self.parsePlainValuesIntoEncodeStmts(variables: variables)
         let (toOne, toMany) = Self.parseRelationshipsIntoDictString(variables: variables)
+        
+        // Parsing decoding variables
+        let (decodingPlainValues, decodingPlainOptionalValues) = Self.parsePlainValuesIntoDecodeStmts(variables: variables)
+        let decodingToOneValues = Self.parseToOneRelationshipsIntoDecodeStmts(variables: variables)
+        let decodingToManyValues = Self.parseToManyRelationshipsIntoDecodeStmts(variables: variables)
         
         let entityRepresentableExtension = try ExtensionDeclSyntax("""
         extension \(type.trimmed): EntityRepresentable {
@@ -58,7 +62,14 @@ public struct EntityRepresentableMacro: ExtensionMacro {
                 }
         
                 visited.updateValue(nil, forKey: representation.id)
+                
+                \(raw: decodingPlainValues)
         
+                \(raw: decodingPlainOptionalValues)
+        
+                \(raw: decodingToOneValues)
+        
+                \(raw: decodingToManyValues)
             }
             
             func encode(visited: inout [UUID : EntityRepresentation]) -> EntityRepresentation {
@@ -70,9 +81,9 @@ public struct EntityRepresentableMacro: ExtensionMacro {
                 visited[self.id] = encoded
         
                 \(raw: valuesDecl) values: [String : Any] = [
-                    \(raw: values)
+                    \(raw: encodingPlainValues)
                 ]
-                \(optionalValues.isEmpty ? "" : "\n\(optionalValues)\n")
+                \(encodingOptionalValues.isEmpty ? "" : "\n\(encodingOptionalValues)\n")
                 let toOneRelationships: [String : EntityRepresentation] = [
                     \(raw: toOne)
                 ]
@@ -99,20 +110,12 @@ public struct EntityRepresentableMacro: ExtensionMacro {
 
 // MARK: - Main Macro Encode Parsers
 extension EntityRepresentableMacro {
-    private static func parseValuesIntoDictString(variables: [VariableDetails]) -> (values: String, optionals: String) {
-        var optionals = [VariableDetails]()
-        
+    private static func parsePlainValuesIntoEncodeStmts(variables: [VariableDetails]) -> (values: String, optionals: String) {
         let parsedValues = variables
+            .filter({ !$0.isOptional && $0.relationship == .none })
             .reduce([String]()) { partialResult, variable in
-                guard variable.relationship == .none else { return partialResult }
-
-                guard !variable.isOptional else {
-                    optionals.append(variable)
-                    return partialResult
-                }
-                
                 var newResult = partialResult
-                let variableName = variable.customName != nil ? variable.customName! : variable.trueName
+                let variableName = variable.customName ?? variable.trueName
                 
                 newResult.append("""
                 "\(variableName)" : self.\(variable.trueName),
@@ -121,7 +124,8 @@ extension EntityRepresentableMacro {
                 return newResult
             }
         
-        let parsedOptionalValues = optionals
+        let parsedOptionalValues = variables
+            .filter({ $0.isOptional && $0.relationship == .none })
             .map { variable in
                 let variableName = variable.customName != nil ? variable.customName! : variable.trueName
                 
@@ -144,11 +148,10 @@ extension EntityRepresentableMacro {
     
     private static func parseRelationshipsIntoDictString(variables: [VariableDetails]) -> (toOne: String, toMany: String) {
         let toOne = variables
+            .filter({ $0.relationship == .toOne })
             .reduce([String]()) { partialResult, variable in
-                guard variable.relationship == .toOne else { return partialResult }
-                
                 var newResult = partialResult
-                let variableName = variable.customName != nil ? variable.customName! : variable.trueName
+                let variableName = variable.customName ?? variable.trueName
                 
                 newResult.append("""
                 "\(variableName)" : self.\(variable.trueName).encode(visited: &visited),
@@ -158,9 +161,8 @@ extension EntityRepresentableMacro {
             }
         
         let toMany = variables
+            .filter({ $0.relationship == .toMany })
             .reduce([String]()) { partialResult, variable in
-                guard variable.relationship == .toMany else { return partialResult }
-                
                 var newResult = partialResult
                 let variableName = variable.customName != nil ? variable.customName! : variable.trueName
                 
@@ -174,6 +176,88 @@ extension EntityRepresentableMacro {
         
         return (toOne: toOne.isEmpty ? ":" : toOne.joined(separator: "\n"),
                 toMany: toMany.isEmpty ? ":" : toMany.joined(separator: "\n"))
+    }
+}
+
+// MARK: - Main Macro Decode Parsers
+extension EntityRepresentableMacro {
+    private static func parsePlainValuesIntoDecodeStmts(variables: [VariableDetails]) -> (plain: String, optionals: String) {
+        let mandatoryValues = variables
+            .filter({ !$0.isOptional && $0.relationship == .none })
+            .reduce([String]()) { partialResult, variable in
+                var newResult = partialResult
+                let variableName = variable.customName ?? variable.trueName
+                
+                newResult.append("""
+                guard let \(variableName) = representation.values["\(variableName)"] as? \(variable.type) else { return nil }
+                """)
+                
+                return newResult
+            }
+        
+        let optionalValues = variables
+            .filter({ $0.isOptional && $0.relationship == .none })
+            .reduce([String]()) { partialResult, variable in
+                var newResult = partialResult
+                let variableName = variable.customName ?? variable.trueName
+                
+                newResult.append("""
+                let \(variableName) = representation.values["\(variableName)"] as? \(variable.type)
+                """)
+                
+                return newResult
+            }
+        
+        return (mandatoryValues.joined(separator: "\n\n"), optionalValues.joined(separator: "\n"))
+    }
+    
+    private static func parseToOneRelationshipsIntoDecodeStmts(variables: [VariableDetails]) -> String {
+        let toOne = variables
+            .filter({ $0.relationship == .toOne })
+            .reduce([String]()) { partialResult, variable in
+                var newResult = partialResult
+                let variableName = variable.customName ?? variable.trueName
+                
+                newResult.append("""
+                guard let \(variableName)Representation = representation.toOneRelationships["\(variableName)"], let \(variableName) = \(variable.type).decode(representation: \(variableName)Representation, visited: &visited) else { return nil }
+                """)
+                
+                return newResult
+            }
+        
+        return toOne.joined(separator: "\n")
+    }
+    
+    private static func parseToManyRelationshipsIntoDecodeStmts(variables: [VariableDetails]) -> String {
+        let toMany = variables
+            .filter({ $0.relationship == .toMany })
+            .reduce([String]()) { partialResult, variable in
+                var newResult = partialResult
+                let variableName = variable.customName ?? variable.trueName
+                
+                newResult.append("""
+                guard let \(variableName)Representations = representation.toManyRelationships["\(variableName)"] else { return nil }
+                let \(variableName) = \(variableName)Representations.reduce(\(variable.type)()) { partialResult, innerRepresentation in
+                    guard let model = \(variable.type).decode(representation: innerRepresentation, visited: &visited) else {
+                        return partialResult
+                    }
+                    
+                    var result = partialResult
+                    result.append(model)
+                
+                    return result
+                }
+                
+                """)
+                
+                return newResult
+            }
+        return toMany.joined(separator: "\n")
+    }
+    
+    private static func parseCodableValuesIntoDecodeStmts(variables: [VariableDetails]) -> String {
+        
+        return ""
     }
 }
 
@@ -369,11 +453,18 @@ public struct EntityRepresentableCustomNamedMacro: MemberAttributeMacro {
     }
 }
 
+public struct EntityRepresentableCodableMacro: MemberAttributeMacro {
+    public static func expansion(of node: AttributeSyntax, attachedTo declaration: some DeclGroupSyntax, providingAttributesFor member: some DeclSyntaxProtocol, in context: some MacroExpansionContext) throws -> [AttributeSyntax] {
+        return []
+    }
+}
+
 @main
 struct DatabasePlugin: CompilerPlugin {
     let providingMacros: [Macro.Type] = [
         EntityRepresentableMacro.self,
         EntityRepresentableRelationshipMacro.self,
-        EntityRepresentableIgnorableMacro.self
+        EntityRepresentableIgnorableMacro.self,
+        EntityRepresentableCodableMacro.self
     ]
 }

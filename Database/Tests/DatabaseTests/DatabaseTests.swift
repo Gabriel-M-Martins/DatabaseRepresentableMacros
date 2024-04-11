@@ -13,7 +13,8 @@ let testMacros: [String: Macro.Type] = [
     "EntityRepresentable": EntityRepresentableMacro.self,
     "EntityRepresentableRelationship": EntityRepresentableRelationshipMacro.self,
     "EntityRepresentableIgnorable" : EntityRepresentableIgnorableMacro.self,
-    "EntityRepresentableCustomNamed" : EntityRepresentableCustomNamedMacro.self
+    "EntityRepresentableCustomNamed" : EntityRepresentableCustomNamedMacro.self,
+    "EntityRepresentableCodable" : EntityRepresentableCodableMacro.self
 ]
 #endif
 
@@ -22,8 +23,6 @@ final class DatabaseTests: XCTestCase {
         #if canImport(DatabaseMacros)
         assertMacroExpansion(
             """
-            class Foo {}
-            extension Foo: EntityRepresentable {}
             @EntityRepresentable(entityName: "ClothingEntity")
             class Clothing {
                 var id: UUID
@@ -32,26 +31,29 @@ final class DatabaseTests: XCTestCase {
                 @EntityRepresentableCustomNamed("barril")
                 var bar: Foo
                 @EntityRepresentableRelationship
+                var bar3: Foo
+                @EntityRepresentableRelationship
                 var bar2: [Foo]
                 @EntityRepresentableIgnorable
                 var ignored = ""
                 var optionalValue: String?
-                var array1: [String]
-                var array2: [String]?
+                @EntityRepresentableCodable
+                var image: Data?
+                @EntityRepresentableCodable
+                var thumbnail: Data
             }
             """,
             expandedSource: """
-            class Foo {}
-            extension Foo: EntityRepresentable {}
             class Clothing {
                 var id: UUID
                 var valor: String
                 var bar: Foo
+                var bar3: Foo
                 var bar2: [Foo]
                 var ignored = ""
                 var optionalValue: String?
-                var array1: [String]
-                var array2: [String]?
+                var image: Data?
+                var thumbnail: Data
             }
             
             extension Clothing: EntityRepresentable {
@@ -61,6 +63,37 @@ final class DatabaseTests: XCTestCase {
                     }
             
                     visited.updateValue(nil, forKey: representation.id)
+            
+                    guard let id = representation.values["id"] as? UUID else {
+                        return nil
+                    }
+            
+                    guard let valor = representation.values["valor"] as? String else {
+                        return nil
+                    }
+            
+                    let optionalValue = representation.values["optionalValue"] as? String
+            
+                    guard let barrilRepresentation = representation.toOneRelationships["barril"], let barril = Foo.decode(representation: barrilRepresentation, visited: &visited) else {
+                        return nil
+                    }
+                    guard let bar3Representation = representation.toOneRelationships["bar3"], let bar3 = Foo.decode(representation: bar3Representation, visited: &visited) else {
+                        return nil
+                    }
+            
+                    guard let bar2Representations = representation.toManyRelationships["bar2"] else {
+                        return nil
+                    }
+                    let bar2 = bar2Representations.reduce([Foo] ()) { partialResult, innerRepresentation in
+                        guard let model = [Foo].decode(representation: innerRepresentation, visited: &visited) else {
+                            return partialResult
+                        }
+
+                        var result = partialResult
+                        result.append(model)
+
+                        return result
+                    }
             
                 }
             
@@ -83,6 +116,7 @@ final class DatabaseTests: XCTestCase {
             
                     let toOneRelationships: [String : EntityRepresentation] = [
                         "barril" : self.bar.encode(visited: &visited),
+                        "bar3" : self.bar3.encode(visited: &visited),
                     ]
             
                     let toManyRelationships: [String : [EntityRepresentation]] = [
